@@ -1,0 +1,44 @@
+[
+  {
+    "objectID": "RWDMOH001.html#bag-of-words-and-tf-idf",
+    "href": "RWDMOH001.html#bag-of-words-and-tf-idf",
+    "title": "STA5073Z Assignment 1",
+    "section": "Bag-of-Words and TF-IDF",
+    "text": "Bag-of-Words and TF-IDF\nThe tokenised data is now put into a bag of words format - this shows the occurrence of words within a document. This ignores grammar and focuses on the frequency counts of each word, and in this case, each word per sentence. These word frequencies are then used as the features in the subsequent models. Based on the frequency of words within a particular sentence, which president said it in their speech.\nTo ensure that the sentence structure is maintained, each sentence from a president is a row of data. For each row it is tokenised for each word in the sentence and count its frequency. Note that, for this problem, we shall look at the frequency of the 500 most popular words. Each sentence is represented by a row and each word is represented by a column. The frequency of that word in each sentence is given as the elements. The first column (index) indicates the sentence index. The second column (pres_name) shows the president from which the sentence is taken from. Besides the data described above, we also generate a bag-of-words model using the TF-IDF method. It was done to provide the previous figure however we shall do it more formally and create a usable dataset."
+  },
+  {
+    "objectID": "RWDMOH001.html#imbalanced-data",
+    "href": "RWDMOH001.html#imbalanced-data",
+    "title": "STA5073Z Assignment 1",
+    "section": "Imbalanced Data",
+    "text": "Imbalanced Data\nWhat can also be seen from the exploration is that the data is ‘imbalanced’. This refers to the classes not being represented equally. Given our data we have the following number of sentences for each president:\n\n\n\n\nDe Klerk\nMandela\nMbeki\nMotlanthe\nRamaphosa\nZuma\n\n\n\n\nCount\n91\n1578\n2337\n249\n2201\n2486\n\n\n\nDe Klerk amd Motlanthe have less than 100 sentences, Mandela over 1000, and Mbeki, Zuma and Ramaphosa have over 2000 sentences where ideally we would like them to have a similar amount. This shows the imbalance across the classes. Usually a small difference often does not matter, however, given the imbalance we have, it is not likely that we will have good classifiers.\nOur models may fall in the accuracy paradox where accuracy measures may be good however it mimics the underlying distribution of the classes - it predicts everything for the majority classes/does not try to predict for the under-represnted classes, giving a high accuracy. Therefore it is also important to consider other measures of accuracy when assessing classification models.\nTo fix our imbalanced data problem we can look at under-sampling - removing observations from the bigger classes or over-sampling methods, adding observations to the smaller classes. Ideally under-sampling wouldn’t be the best choice since we are cutting down on the data we have which is already not much. Therefore an oversampling method we choose is Random Over-Sampling Examples (ROSE). Using the ROSE package in R, and the function ovun.sample() we do both oversampling and under-sampling. We have choose arbitrarily to have around 1000 observations for each president (sentences for each president).\nAfter implementing the ROSE method, we now have the following distribution of the classes\n\n\n\n\nDe Klerk\nMandela\nMbeki\nMotlanthe\nRamaphosa\nZuma\n\n\n\n\nCount\n963\n974\n967\n969\n998\n1037"
+  },
+  {
+    "objectID": "RWDMOH001.html#data-splitting",
+    "href": "RWDMOH001.html#data-splitting",
+    "title": "STA5073Z Assignment 1",
+    "section": "Data Splitting",
+    "text": "Data Splitting\nTo create our models we need to split the data into training, test/validation and holdout sets. We will use a 70/30 split for training and holdout respectively, with an 80/20 split within the training and test/validation set when training the neural networks."
+  },
+  {
+    "objectID": "RWDMOH001.html#neural-networks",
+    "href": "RWDMOH001.html#neural-networks",
+    "title": "STA5073Z Assignment 1",
+    "section": "Neural Networks",
+    "text": "Neural Networks\nA feedforward neural network is a fundamental architecture in neural networks. It comprises of an input layer, one or more hidden layers, and an output layer. The input layer receives the initial data or features, with each neuron representing a distinct feature. The network’s computation takes place in the hidden layers, where each neuron calculates a weighted sum of its inputs from the previous layer and applies an activation function. These weighted connections are learnable parameters of the network and are adjusted during training to minimize the difference between the network’s predictions and the true target values. The output layer generates the final output, and the choice of activation function here depends on the specific task, such as softmax for classification.\nDuring forward propagation, data flows through the network, with each layer processing and passing information to the next layer. The output of the output layer represents the network’s final prediction, whether it’s a classification, regression value, or any other relevant output. To train the network, a loss function is used to measure the difference between the network’s predictions and the actual target values. The network then uses an optimization algorithm, often gradient descent, to update the weights through a process called backpropagation. Training involves iteratively adjusting these weights on a large dataset through multiple epochs until the network’s performance reaches a satisfactory level. The feedforward neural network learns to make predictions or classifications by processing data in a sequential manner and adapting its weights through training to improve its accuracy for a given task.\nFor the assignment we are using a sentence as an input and the output being the president who said it - this will be the prediction. We will create a model for the bag-of-words data, the TF-IDF data as well as for the ROSE data. The model is a simple neural network with 10 units in input layer, with ReLu activation function, 8 units in hidden layer with ReLu activation function and 6 units in output layer with softmax function using the the Adam optimiser with a learning rate of 0.01. We train this over a batch size of 5 for a total of 40 epochs."
+  },
+  {
+    "objectID": "RWDMOH001.html#multinomial-logistic-regression",
+    "href": "RWDMOH001.html#multinomial-logistic-regression",
+    "title": "STA5073Z Assignment 1",
+    "section": "Multinomial Logistic Regression",
+    "text": "Multinomial Logistic Regression\nMultinomial logistic regression is a statistical method for predicting the probabilities of multiple classes in a categorical variable. It extends binary logistic regression to handle more than two outcomes. The model uses independent variables to estimate parameters through maximum likelihood, and a softmax function converts raw predictions into probabilities, ensuring they sum to 1 for all classes. This approach is commonly employed in machine learning for tasks involving classification with multiple possible outcomes."
+  },
+  {
+    "objectID": "RWDMOH001.html#decision-trees",
+    "href": "RWDMOH001.html#decision-trees",
+    "title": "STA5073Z Assignment 1",
+    "section": "Decision Trees",
+    "text": "Decision Trees\nDecision trees are a machine learning algorithm used for both classification and regression tasks. They work by recursively partitioning the data based on the values of features, creating a tree-like structure. Each internal node represents a decision based on a specific feature, and each leaf node represents the predicted outcome. The algorithm makes decisions by evaluating features at each node and branching accordingly. Decision trees are interpretable, easy to understand, and can handle both numerical and categorical data"
+  }
+]

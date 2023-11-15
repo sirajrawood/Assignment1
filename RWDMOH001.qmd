@@ -1,0 +1,1107 @@
+---
+title: "STA5073Z Assignment 1"
+author: "Siraj Rawood (RWDMOH001)"
+format: html
+institute: "Department of Statistical Sciences, University of Cape Town"
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE, echo=FALSE, fig.align='center'}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+#setwd
+
+set.seed(2023)
+```
+
+\newpage
+# Introduction 
+
+For this assignment we will concentrate on working with text data and using different methods to clean the data, making it usable for predictive modelling - given a sentence of text, which South African president was more likely to have said it.
+
+To start the analysis we first load the packages needed as well as the data with an introduction to the dataset. Then we can begin data cleaning and preprocessing, leading to the initial exploration of the dataset. The aim at this point is to understand the dataset to better guide the analysis in later stages and inform the partitioning of the data into training and testing sets. Subsequently, we transition to transforming the data into a bag-of-words model, including further text processing steps such as eliminating stop words and using TF-IDF weighted counts. The next step involves the introduction of neural networks, multinomial logistic regression and decision trees, with a high-level background and outline our modeling approach. We address issues related to data imbalance, splitting training and testing data and methods for assessing model performance. Lastly, a brief discussion of the results and an overall conclusion.
+
+# Exploratory Data Analysis
+
+
+The data is contained within the `sona-addresses-1994-2023.zip` file. It contains text files for each of the State of the Nation Address (SONA) speeches from 1994 to 2023 given by the South African president of the corresponding year. This is an annual even in which provides an opportunity for the country's president to address the nation, its legislative body (e.g., parliament or congress), and the broader public on the status of the country and priorities for the future.The data can be sourced from the [SONA website](https://www.gov.za/state-nation-address). Since this event happens twice during an election year, the file comprises of 36 speeches.
+
+We make use of the `readtext()` function from the *readtext* package to read in all the `.txt` files. This is then converted to a tibble to make it comply with the data types needed for cleaning using *dplyr*.
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+# Load Packages
+if (!require("pacman")) install.packages("pacman")
+#p_load(readtext, keras, tensorflow, tidyverse, ggplot2, ggpubr, stringr, wordcloud, tidytext, stopwords, plotly, lubridate, DMwR, caret, nnet, randomForest, gbm, ROSE, pROC,multiROC, rpart)
+
+library('readtext')
+library('keras')
+library('tensorflow')
+library('tidyverse')
+library('ggplot2')
+library('ggpubr')
+library('stringr')
+library('wordcloud')
+library('tidytext')
+library('stopwords')
+library('plotly')
+library('lubridate')
+#library('DMwR')
+library('caret')
+library('nnet')
+library('randomForest')
+library('gbm')
+library('ROSE')
+library('pROC')
+library('multiROC')
+library('rpart')
+
+```
+
+
+```{r read in and save data, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+# read in txt data to file
+speeches <- readtext::readtext("sona-addresses-1994-2023/*.txt")
+
+
+# convert to tibble
+speeches <- as_tibble(speeches)
+
+# save data file
+#save(speeches, file = "speech.txt")
+```
+
+We first reformat the date, convert all text to lower case and create a new column to show which president gave the respective speech called *president* - this becomes our response variable. We turn the data into tidy format and tokenise it - a unit of text to use for analysis: in this case into words and sentences. The `unnest_tokens()` function splits the text into a new data frame with one token per row, making the data tidy. We further clean the data by removing the dates and certain punctuation and escape sequences. Lastly we also remove stop words.
+
+
+```{r cleaning dates, echo=FALSE, include=FALSE}
+
+# get date column in tible
+speeches <- speeches %>% mutate(date=NA)
+for(i in 1:nrow(speeches)){
+  speeches[i,"date"] <- str_extract(speeches[i,1], '\\d{4}')
+}
+speeches <- speeches %>% mutate(date = parse_datetime(str_sub(speeches$date,1,4), '%Y'))
+
+# change date for post election years
+bool <- data.frame()
+for(i in 1:nrow(speeches)){
+  if (str_detect(speeches[i,1], '\\d{4}.post')){
+    speeches$date[i] <- speeches$date[i] + months(5)
+  }
+  else{
+    speeches$date[i] <- speeches$date[i]
+  }
+}
+
+# check results
+speeches$date
+
+# info on dates
+paste("Earliest tweet date:",min(speeches$date))
+paste("Latest tweet date:",max(speeches$date))
+max(speeches$date) - min(speeches$date)
+
+# months in data
+#interval(min(speeches$date), max(speeches$date)) %/% months(1) #Add 1 to determine how MANY
+
+```
+
+
+```{r adding new columns, echo=FALSE, include=FALSE}
+
+# add president column
+speeches <- speeches %>% mutate(president = NA)
+for(i in 1:nrow(speeches)){
+  speeches$president[i] <- str_extract(str_extract(speeches[i,1], "[A-Za-z]{4,}[.]"), "[A-za-z]{4,}")
+}
+
+# convert to lower case
+speeches$text <- str_to_lower(speeches$text)
+speeches
+
+# what to unnest tokens as
+unnest_reg <- "[^\\w_#@']"
+
+titles =  c("Mr", "Dr", "Mrs", "Ms", "Sr", "Jr")
+regex = paste0("(?<!\\b(", paste(titles, collapse = "|"), "))\\.")
+
+
+
+# tokenize sentences
+speech_sentences <- speeches %>% 
+  mutate(text = str_replace_all(text, '(\\n)', ' ')) %>%
+  mutate(text = str_replace_all(text, '\"', ''))  %>% 
+  mutate(text = str_remove_all(text, "[0-9]{1,} [A-Za-z]{3,} [0-9]{4} ")) %>% 
+  mutate(text, text = str_replace_all(text, "’", "'")) %>%  #replace curly apostrophe with straight
+  mutate(president =  as.factor(president)) %>%  
+  unnest_tokens(sentences, text,token = "regex",pattern = regex) %>% #tokenize 
+  arrange(date) %>%
+  select(date, president, sentences, doc_id)          #choose the variables we need
+speech_sentences
+
+# tokenize words
+speech_words <- speeches %>% 
+  mutate(text = str_replace_all(text, '(\\n)', ' ')) %>%
+  mutate(text = str_replace_all(text, '\"', ''))  %>% 
+  mutate(text = str_remove_all(text, "[0-9]{1,} [A-Za-z]{3,} [0-9]{4} ")) %>% 
+  mutate(text, text = str_replace_all(text, "’", "'")) %>%  #replace curly apostrophe with straight
+  mutate(president =  as.factor(president)) %>%  
+  unnest_tokens(word, text, token = 'regex', pattern = unnest_reg) %>% #tokenize
+  filter(!word %in% stop_words$word, str_detect(word, '[A-Za-z]')) %>% #remove stop words
+  arrange(date) %>%
+  select(date, president, word, doc_id)          #choose the variables we need
+speech_words
+
+# remove stop words from data frame
+speech_sentences$sentences <- unlist(lapply(speech_sentences$sentences, function(x) {paste(unlist(strsplit(x, " "))[!(unlist(strsplit(x, " ")) %in% stop_words$word)], collapse=" ")}))
+speech_sentences
+
+```
+
+For the exploration of the data we will look for any patterns emerging from the data, see what the presidents say most often and the language they use.
+
+The plot below shows us the most common words used by each president:
+
+```{r word exploring, fig.width=10, fig.align='center', fig.height=8, echo=FALSE}
+# most common words used by president
+speech_words %>% 
+  group_by(president) %>% 
+  mutate(Word = factor(word, levels = rev(unique(word)))) %>%
+  count(Word, sort = TRUE) %>%
+  filter(rank(desc(n)) <= 20) %>%
+  #arrange(n) %>%
+  ggplot() +
+  aes(x = Word, y = n, fill = president) +
+  geom_col() +
+  labs(x = "Words", y = "Count",
+       title = "Top 20 Words Said per President") +
+  coord_flip() +
+  facet_wrap(vars(president), scales = "free")+
+    theme(legend.position = 'none')
+```
+From this we can see that there are certain words that are mentioned more often by certain presidents. De Klerk only has one speech from 1994 but we can see he talks a lot about the transformation South Africa was soon to face such as "constitution" and "freedom". The same with Mandela in that he mentions "government", "public " and "people" many times - how he has to ensure the new government can serve the country and its people.
+
+All presidents also use the words "south" and "africa"/"african" very often. This is understandable as they need to use the demonym for the country. It would also suggest that these words won't have much of an influence on the models. This also shows that there are no clear differences between the words used by each president and not much to distinguish between them.
+
+To allow us to see differences more clearly, we will use term frequency – inverse document frequency  (TF-IDF). This will weight words used across the speeches and place more emphasis on the words that are less common between the different presidents. Words with higher weights show greater value between the presidents, showing which may have higher predictive value. The plot below shows this:
+
+
+```{r tfidf in r, echo=FALSE, message=FALSE, warning=FALSE, fig.align='center', fig.height=4.5, fig.width=10}
+
+tf_idf_explore <- speech_words %>%
+    count(president, word, sort = TRUE) %>%
+    bind_tf_idf(word, president, n)
+
+# TF IDF Values arranges
+#tf_idf_explore %>%arrange(desc(tf_idf))
+
+# Plot of TF IDF - main items that separate one president from the other.
+tf_idf_explore %>%
+  group_by(president) %>%
+  arrange(desc(tf_idf)) %>%
+  mutate(Word = factor(word, levels = rev(unique(word)))) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  ggplot(mapping = aes(x = Word, y = tf_idf, fill = president)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = NULL) +
+  coord_flip() +
+  facet_wrap(~ president, scales = "free") +   
+  labs(x = "", y = "TF-IDF Scores",
+       title = "Top TF-IDF scores for words for each president")+
+    theme(legend.position = 'none')
+
+```
+From this plot we can see the words seperating the presidents more clearly. For instance it can be seen that Ramaphosa mentions "covid" and the "pandemic". This holds a high score as no other president encountered this in their tenure and has said this, however the rest of the words are scored very low. De Klerk has high scores for a few words, showing that he uses these more often than other presidents and is clearly distinguished from the rest. Whereas Zuma places high emphasis on greetings, he also shares that with Mbeki and his other highest scored words are still relatively low. We will be able to see how this analysis translates into the models. It can be seen that south and africa are not in these graphs due to it now having a low score - it has a high frequency amongst all presidents.
+
+
+## Bag-of-Words and TF-IDF
+
+The tokenised data is now put into a bag of words format - this shows the occurrence of words within a document. This ignores grammar and focuses on the frequency counts of each word, and in this case, each word per sentence. These word frequencies are then used as the features in the subsequent models. Based on the frequency of words within a particular sentence, which president said it in their speech.
+
+To ensure that the sentence structure is maintained, each sentence from a president is a row of data. For each row it is tokenised for each word in the sentence and count its frequency. Note that, for this problem, we shall look at the frequency of the 500 most popular words. Each sentence is represented by a row and each word is represented by a column. The frequency of that word in each sentence is given as the elements. The first column (*index*) indicates the sentence index. The second column (*pres_name*) shows the president from which the sentence is taken from. Besides the data described above, we also generate a bag-of-words model using the TF-IDF method. It was done to provide the previous figure however we shall do it more formally and create a usable dataset.
+
+```{r bag of words model with no tf idf, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+
+# get wanted data
+tidy_sentences <- speech_sentences %>% select(date, sentences, president)
+
+# get ID
+tidy_sentences$index <- 1:nrow(tidy_sentences)
+speech_sentences$index <- 1:nrow(speech_sentences)
+
+# get words from sentences
+tidy_sentences <- tidy_sentences %>% 
+  unnest_tokens(word, sentences, token = 'regex', pattern = unnest_reg) %>% #tokenize
+  filter(!word %in% stop_words$word, str_detect(word, '[A-Za-z]')) %>% #remove stop words
+  arrange(date) %>%
+  select(date, index, word, president)          #choose the variables we need
+
+# most popular words
+tidy_sentences %>%
+  group_by(word) %>%
+  count() %>%
+  ungroup() %>% 
+  arrange(desc(n)) %>%
+  filter(rank(desc(n)) <= 10)
+
+
+# Bag-of-Words
+word_bag <- tidy_sentences %>%
+  group_by(word) %>%
+  count() %>%
+  ungroup() %>%
+  top_n(500, wt = n) %>%
+  select(-n)
+
+# nunber of words
+nrow(word_bag)
+
+# tdf 
+speech_tdf <- tidy_sentences %>%
+  inner_join(word_bag) %>%
+  group_by(index,word) %>%
+  count() %>%  
+  group_by(index) %>%
+  mutate(total = sum(n)) %>%
+  ungroup()
+
+# view 
+speech_tdf
+
+# each row is a sentence, each column is word
+bag_of_words <- speech_tdf %>% 
+  select(index, word, n) %>% 
+  pivot_wider(names_from = word, values_from = n, values_fill = 0) %>%
+  left_join(speech_sentences %>% mutate(pres_name = as.numeric(president)) %>% select(index, pres_name)) %>%
+  select(index, pres_name, everything())
+
+# get presidents names
+bag_of_words$pres_name <- as.factor(bag_of_words$pres_name)
+levels(bag_of_words$pres_name) <- levels(speech_sentences$president)
+bag_of_words
+
+# number of sentences
+nrow(bag_of_words)
+
+# number of variables (words, plus id and response)
+ncol(bag_of_words)
+
+# view it and save it
+bag_of_words %>% arrange(index, president)
+OG_bag_of_words <- bag_of_words
+
+```
+
+
+
+```{r bag of words model with tf idf data, echo=FALSE, include=FALSE}
+
+speech_tdf <- speech_tdf %>% 
+  bind_tf_idf(word, index, n)   # values from tidytext
+
+tfidf <-  suppressMessages(speech_tdf %>% 
+select(index, word, tf_idf) %>%  # note the change, using tf-idf
+  pivot_wider(names_from = word, values_from = tf_idf, values_fill = 0) %>%  
+  left_join(speech_sentences %>% mutate(pres_name = as.numeric(president)) %>% select(index, pres_name)) %>%
+  select(index, pres_name, everything()))
+
+# get presidents names
+tfidf$pres_name <- as.factor(tfidf$pres_name)
+levels(tfidf$pres_name) <- levels(speech_sentences$president)
+tfidf
+
+# get and save data
+OG_tfidf <- tfidf
+
+```
+
+## Imbalanced Data
+
+What can also be seen from the exploration is that the data is 'imbalanced'. This refers to the classes not being represented equally. Given our data we have the following number of sentences for each president:
+
+|       | De Klerk | Mandela | Mbeki | Motlanthe | Ramaphosa | Zuma |
+|-------|----------|---------|-------|-----------|-----------|------|
+| Count | 91       | 1578    | 2337  | 249       | 2201      | 2486 |
+
+De Klerk amd Motlanthe have less than 100 sentences, Mandela over 1000, and Mbeki, Zuma and Ramaphosa have over 2000 sentences where ideally we would like them to have a similar amount. This shows the imbalance across the classes. Usually a small difference often does not matter, however, given the imbalance we have, it is not likely that we will have good classifiers.
+
+Our models may fall in the *accuracy* paradox where accuracy measures may be good however it mimics the underlying distribution of the classes - it predicts everything for the majority classes/does not try to predict for the under-represnted classes, giving a high accuracy. Therefore it is also important to consider other measures of accuracy when assessing classification models.
+
+To fix our imbalanced data problem we can look at  under-sampling - removing observations from the bigger classes or over-sampling methods, adding observations to the smaller classes. Ideally under-sampling wouldn't be the best choice since we are cutting down on the data we have which is already not much. Therefore an oversampling method we choose is Random Over-Sampling Examples (ROSE). Using the *ROSE* package in R, and the function `ovun.sample()` we do both oversampling and under-sampling. We have choose arbitrarily to have around 1000 observations for each president (sentences for each president). 
+
+
+```{r, include=FALSE}
+table(OG_tfidf$pres_name)
+```
+
+
+
+```{r using ROSE, echo=FALSE, include=FALSE}
+
+#set seed
+set.seed(2023)
+
+# get original data
+bag_of_words <- OG_bag_of_words
+table(bag_of_words$pres_name)
+
+# split
+d1 <- rbind(bag_of_words[which(bag_of_words$pres_name=="Zuma"),], bag_of_words[which(bag_of_words$pres_name=="deKlerk"),])
+d1.ov <- ovun.sample(pres_name~.-index, data = d1, method = "both", N=2000)$data
+table(d1$pres_name)
+table(d1.ov$pres_name)
+
+d2 <- rbind(bag_of_words[which(bag_of_words$pres_name=="Zuma"),], bag_of_words[which(bag_of_words$pres_name=="Mandela"),])
+d2.ov <- ovun.sample(pres_name~.-index, data = d2, method = "both", N=2000)$data
+table(d2$pres_name)
+table(d2.ov$pres_name)
+
+d3 <- rbind(bag_of_words[which(bag_of_words$pres_name=="Zuma"),], bag_of_words[which(bag_of_words$pres_name=="Mbeki"),])
+d3.ov <- ovun.sample(pres_name~.-index, data = d3, method = "both", N=2000)$data
+table(d3$pres_name)
+table(d3.ov$pres_name)
+
+d4 <- rbind(bag_of_words[which(bag_of_words$pres_name=="Zuma"),], bag_of_words[which(bag_of_words$pres_name=="Motlanthe"),])
+d4.ov <- ovun.sample(pres_name~.-index, data = d4, method = "both", N=2000)$data
+table(d4$pres_name)
+table(d4.ov$pres_name)
+
+d5 <- rbind(bag_of_words[which(bag_of_words$pres_name=="Zuma"),], bag_of_words[which(bag_of_words$pres_name=="Ramaphosa"),])
+d5.ov <- ovun.sample(pres_name~.-index, data = d5, method = "both", N=2000)$data
+table(d5$pres_name)
+table(d5.ov$pres_name) 
+
+# final df with balanced data
+ovsamp_bag_of_words <- rbind(d1.ov, d2.ov[which(d2.ov$pres_name!="Zuma"),],
+                    d3.ov[which(d3.ov$pres_name!="Zuma"),],
+                    d4.ov[which(d4.ov$pres_name!="Zuma"),],
+                    d5.ov[which(d5.ov$pres_name!="Zuma"),])
+
+ovsamp_bag_of_words <- ovsamp_bag_of_words %>% arrange(index, pres_name) %>% as_tibble()
+ovsamp_bag_of_words$pres_name <- factor(ovsamp_bag_of_words$pres_name, levels = levels(OG_bag_of_words$pres_name))
+ovsamp_bag_of_words$index <- 1:nrow(ovsamp_bag_of_words)
+ovsamp_bag_of_words <- ovsamp_bag_of_words %>% arrange(index, pres_name) %>% as_tibble()
+table(ovsamp_bag_of_words$pres_name)
+
+ovsamp_bag_of_words[which(ovsamp_bag_of_words$pres_name=="Zuma"),]
+OG_bag_of_words[which(OG_bag_of_words$pres_name=="Zuma"),]
+
+```
+After implementing the ROSE method, we now have the following distribution of the classes
+
+|       | De Klerk | Mandela | Mbeki | Motlanthe | Ramaphosa | Zuma |
+|-------|----------|---------|-------|-----------|-----------|------|
+| Count | 963      | 974     | 967   | 969       | 998       | 1037 |
+
+# Method
+
+## Data Splitting
+
+To create our models we need to split the data into training, test/validation and holdout sets. We will use a 70/30 split for training and holdout respectively, with an 80/20 split within the training and test/validation set when training the neural networks. 
+
+
+## Neural Networks
+
+A feedforward neural network is a fundamental architecture in neural networks. It comprises of an input layer, one or more hidden layers, and an output layer. The input layer receives the initial data or features, with each neuron representing a distinct feature. The network's computation takes place in the hidden layers, where each neuron calculates a weighted sum of its inputs from the previous layer and applies an activation function. These weighted connections are learnable parameters of the network and are adjusted during training to minimize the difference between the network's predictions and the true target values. The output layer generates the final output, and the choice of activation function here depends on the specific task, such as softmax for classification.
+
+During forward propagation, data flows through the network, with each layer processing and passing information to the next layer. The output of the output layer represents the network's final prediction, whether it's a classification, regression value, or any other relevant output. To train the network, a loss function is used to measure the difference between the network's predictions and the actual target values. The network then uses an optimization algorithm, often gradient descent, to update the weights through a process called backpropagation. Training involves iteratively adjusting these weights on a large dataset through multiple epochs until the network's performance reaches a satisfactory level. The feedforward neural network learns to make predictions or classifications by processing data in a sequential manner and adapting its weights through training to improve its accuracy for a given task.
+
+For the assignment we are using a sentence as an input and the output being the president who said it - this will be the prediction. We will create a model for the bag-of-words data, the TF-IDF data as well as for the ROSE data. The model is a simple neural network with 10 units in input layer, with ReLu activation function, 8 units in hidden layer with ReLu activation function and 6 units in output layer with softmax function using the the Adam optimiser with a learning rate of 0.01. We train this over a batch size of 5 for a total of 40 epochs.
+
+
+
+```{r using non scaled non tfidf data, echo=FALSE, eval=FALSE}
+# set seed
+set.seed(2023)
+
+# set c /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+c <- OG_bag_of_words
+
+# set data to use /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+dat <- OG_bag_of_words
+
+# /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+
+# convert string factors to numerical response, starting at 0
+dat <- as.data.frame(dat)
+numerical_target <- factor(dat[,2]) 
+dat[,2] <- as.numeric(numerical_target) -1
+
+# convert to matrix
+dat <- as.matrix(dat)
+dim(dat)
+
+dat_features <- dat[,-c(1,2)]
+dat_target <- dat[,2]
+
+
+# Determine sample size
+set.seed(2023)
+ind <- sample(2, nrow(dat), replace=TRUE, prob=c(0.70, 0.30))
+
+# Split the data
+x_train <- dat_features[ind==1,]
+x_test <- dat_features[ind==2,]
+
+# Split the class attribute
+y_train <- dat_target[ind==1]
+y_test <- dat_target[ind==2]
+
+
+# get data shapes
+dim(x_train)
+dim(x_test)
+
+
+# convert data to one hot encoded
+y_train <- to_categorical(y_train)
+y_test_original = y_test
+y_test <- to_categorical(y_test)
+
+# get dimensions
+dim(y_train)
+dim(y_test)
+
+# build model (initial)
+model <- keras_model_sequential() 
+model %>% 
+    layer_dense(units = 10, activation = 'relu', input_shape = dim(x_train)[2]) %>% 
+    layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 8, activation = 'relu') %>%
+    layer_dense(units = 6, activation = 'softmax')
+
+# summary
+summary(model)
+
+
+# set loss and optimizer, and metric of measuring
+model %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_adam(learning_rate = 0.01),
+  metrics = c('accuracy')
+)
+
+
+# weights - wj=n_samples / (n_classes * n_samplesj)
+df <- data.frame()
+for (i in unique(c$pres_name)){
+  weight = nrow(c)/(6*nrow(c[which(c$pres_name==i),]))
+  df[i,"weights"] <- weight
+}
+df
+
+# set epochs, validation, batch size with WEIGHT CLASSES
+set.seed(2023)
+history <- model %>% fit(
+  x_train, y_train, 
+  epochs = 40, batch_size = 5, 
+  validation_split = 0.2, shuffle = TRUE, verbose = TRUE,
+  class_weight = list("0"=df[1,1],"1"=df[2,1], "2"=df[3,1], "3"=df[4,1], "4"=df[5,1], "5"=df[5,1], "6" =df[6,1])
+)
+
+# training performance
+plot(history)
+
+
+
+# Evaluate the Performance
+model %>% evaluate(x_test, y_test) # accuracy 0.2957746
+
+# confusion matrix
+Y_test_hat <- model %>% predict(x_test) %>% k_argmax() %>% as.numeric()
+predtest <- table(y_test_original, Y_test_hat)
+predtest
+
+table(Y_test_hat)
+table(y_test_original)
+length(y_test_original)
+
+length(Y_test_hat)
+
+# view accuracy
+paste("Testing Accuracy is:", round(sum(diag(predtest))/sum(predtest), 3))  # test accuracy - 20%
+
+ 
+# convert string factors to numerical response, starting at 0
+Y_test_hat <- as.data.frame(Y_test_hat)
+Y_test_hat <- as.factor(Y_test_hat$Y_test_hat) 
+levels(Y_test_hat) <- levels(speech_sentences$president)
+
+y_test_original <- as.data.frame(y_test_original)
+y_test_original <- as.factor(y_test_original$y_test_original) 
+levels(y_test_original) <- levels(speech_sentences$president)
+
+
+# Accuracy and other metrics
+nn.base_test <- confusionMatrix(Y_test_hat, y_test_original)
+
+# save res
+#save(nn.base_test, file = "neuralnetwork_res.Rdata")
+
+```
+
+```{r using TFIDF for NN, echo=FALSE, eval=FALSE}
+# set seed
+set.seed(2023)
+
+# set c /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+c <- OG_tfidf
+
+# set data to use /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+dat <- OG_tfidf
+
+# /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+
+# convert string factors to numerical response, starting at 0
+dat <- as.data.frame(dat)
+numerical_target <- factor(dat[,2]) 
+dat[,2] <- as.numeric(numerical_target) -1
+
+# convert to matrix
+dat <- as.matrix(dat)
+
+dat_features <- dat[,-c(1,2)]
+dat_target <- dat[,2]
+
+# scale data
+#bag_of_words_features <- scale(bag_of_words[,-c(1,2)])
+#bag_of_words_target <- bag_of_words[,2]
+
+# Determine sample size
+set.seed(2023)
+ind <- sample(2, nrow(dat), replace=TRUE, prob=c(0.70, 0.30))
+
+# Split the data
+x_train <- dat_features[ind==1,]
+x_test <- dat_features[ind==2,]
+
+# Split the class attribute
+y_train <- dat_target[ind==1]
+y_test <- dat_target[ind==2]
+
+
+# convert data to one hot encoded
+y_train <- to_categorical(y_train)
+y_test_original = y_test
+y_test <- to_categorical(y_test)
+
+# build model (initial)
+model <- keras_model_sequential() 
+model %>% 
+    layer_dense(units = 10, activation = 'relu', input_shape = dim(x_train)[2]) %>% 
+    layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 8, activation = 'relu') %>%
+    layer_dense(units = 6, activation = 'softmax')
+
+# set loss and optimizer, and metric of measuring
+model %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_adam(learning_rate = 0.01),
+  metrics = c('accuracy')
+)
+
+
+# weights - wj=n_samples / (n_classes * n_samplesj)
+df <- data.frame()
+for (i in unique(c$pres_name)){
+  weight = nrow(c)/(6*nrow(c[which(c$pres_name==i),]))
+  df[i,"weights"] <- weight
+}
+
+# set epochs, validation, batch size with WEIGHT CLASSES
+set.seed(2023)
+history <- model %>% fit(
+  x_train, y_train, 
+  epochs = 40, batch_size = 5, 
+  validation_split = 0.2, shuffle = TRUE, verbose = TRUE,
+  class_weight = list("0"=df[1,1],"1"=df[2,1], "2"=df[3,1], "3"=df[4,1], "4"=df[5,1], "5"=df[5,1], "6" =df[6,1])
+)
+
+# Evaluate the Performance
+model %>% evaluate(x_test, y_test) # accuracy 0.3172579
+
+# confusion matrix
+Y_test_hat <- model %>% predict(x_test) %>% k_argmax() %>% as.numeric()
+predtest <- table(y_test_original, Y_test_hat)
+predtest
+
+# view accuracy
+paste("Testing Accuracy is:", round(sum(diag(predtest))/sum(predtest), 3))  # test accuracy - .258%
+
+ 
+# convert string factors to numerical response, starting at 0
+Y_test_hat <- as.data.frame(Y_test_hat)
+Y_test_hat <- as.factor(Y_test_hat$Y_test_hat) 
+levels(Y_test_hat) <- levels(speech_sentences$president)
+
+y_test_original <- as.data.frame(y_test_original)
+y_test_original <- as.factor(y_test_original$y_test_original) 
+levels(y_test_original) <- levels(speech_sentences$president)
+
+
+# Accuracy and other metrics
+nn.base_tfidf_test <- confusionMatrix(Y_test_hat, y_test_original)
+
+# save res
+#save(nn.base_test, nn.base_scaled_test, nn.base_tfidf_test,  file = "neuralnetwork_res.Rdata")
+
+```
+
+
+
+```{r using ROSE for NN setup, echo=FALSE, eval=FALSE}
+# set seed
+set.seed(2023)
+
+# set c /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+c <- ovsamp_bag_of_words
+
+# set data to use /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+dat <- ovsamp_bag_of_words
+
+# /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+
+# convert string factors to numerical response, starting at 0
+dat <- as.data.frame(dat)
+numerical_target <- factor(dat[,2]) 
+dat[,2] <- as.numeric(numerical_target)-1
+table(dat$pres_name)
+
+# convert to matrix
+dat <- as.matrix(dat)
+
+# no scaling
+dat_features <- dat[,-c(1,2)]
+dat_target <- dat[,2]
+
+# Determine sample size
+set.seed(2023)
+ind <- sample(2, nrow(dat), replace=TRUE, prob=c(0.70, 0.30))
+
+# Split the  data
+x_train <- dat_features[ind==1,]
+x_test <- dat_features[ind==2,]
+
+# Split the class attribute
+y_train <- dat_target[ind==1]
+y_test <- dat_target[ind==2]
+
+
+# convert data to one hot encoded
+y_train <- to_categorical(y_train)
+y_test_original = y_test
+y_test <- to_categorical(y_test)
+
+
+# build model (initial)
+model <- keras_model_sequential() 
+model %>% 
+    layer_dense(units = 10, activation = 'relu', input_shape = dim(x_train)[2]) %>% 
+    layer_dropout(rate = 0.3) %>%
+  layer_dense(units = 8, activation = 'relu') %>%
+    layer_dense(units = 6, activation = 'softmax')
+
+# set loss and optimizer, and metric of measuring
+model %>% compile(
+  loss = 'categorical_crossentropy',
+  optimizer = optimizer_adam(learning_rate = 0.01),
+  metrics = c('accuracy')
+)
+
+
+# set epochs, validation, batch size with WEIGHT CLASSES
+set.seed(2023)
+history <- model %>% fit(
+  x_train, y_train, 
+  epochs = 40, batch_size = 5, 
+  validation_split = 0.2, shuffle = TRUE, verbose = TRUE)
+
+save(history, file = "neuralnetwork_his.Rdata")
+
+# Evaluate the Performance
+model %>% evaluate(x_test, y_test) # accuracy 0.3172579
+
+# confusion matrix
+Y_test_hat <- model %>% predict(x_test) %>% k_argmax() %>% as.numeric()
+predtest <- table(y_test_original, Y_test_hat)
+predtest
+
+# view accuracy
+paste("Testing Accuracy is:", round(sum(diag(predtest))/sum(predtest), 3))  # test accuracy - .258%
+
+ 
+# convert string factors to numerical response, starting at 0
+Y_test_hat <- as.data.frame(Y_test_hat)
+Y_test_hat <- as.factor(Y_test_hat$Y_test_hat) 
+levels(Y_test_hat) <- levels(speech_sentences$president)
+
+y_test_original <- as.data.frame(y_test_original)
+y_test_original <- as.factor(y_test_original$y_test_original) 
+levels(y_test_original) <- levels(speech_sentences$president)
+
+# Accuracy and other metrics
+nn.base_rose_test <- confusionMatrix(Y_test_hat, y_test_original)
+
+# save res
+#save(nn.base_test, nn.base_scaled_test, nn.base_tfidf_test, nn.base_rose_test,  file = "neuralnetwork_res.Rdata")
+
+
+```
+
+
+## Multinomial Logistic Regression
+
+Multinomial logistic regression is a statistical method for predicting the probabilities of multiple classes in a categorical variable. It extends binary logistic regression to handle more than two outcomes. The model uses independent variables to estimate parameters through maximum likelihood, and a softmax function converts raw predictions into probabilities, ensuring they sum to 1 for all classes. This approach is commonly employed in machine learning for tasks involving classification with multiple possible outcomes.
+
+```{r mlr for bow, echo=FALSE, eval=FALSE}
+# set seed
+set.seed(2023)
+
+# set c /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+c <- OG_bag_of_words
+
+# set data to use /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+dat <- OG_bag_of_words
+
+# /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+
+# convert string factors to numerical response, starting at 0
+dat <- as.data.frame(dat)
+
+
+# Determine sample size
+set.seed(2023)
+ind <- sample(2, nrow(dat), replace=TRUE, prob=c(0.70, 0.30))
+
+train <- dat[ind==1,]
+test <- dat[ind==2,]
+
+# Setting the reference
+train$pres_name <- relevel(train$pres_name, ref = "deKlerk")
+
+# Training the multinomial model
+multinom_model <- multinom(pres_name ~ ., data = train, MaxNWts =10000000)
+
+
+# Predicting the values for train dataset
+train$ClassPredicted <- predict(multinom_model, newdata = train, "class")
+
+# Building classification table
+tab <- table(train$pres_name, train$ClassPredicted)
+
+# Calculating accuracy - sum of diagonal elements divided by total obs
+(MLR_bag_of_words.accuracyTrain <- round((sum(diag(tab))/sum(tab))*100,2)) # 95.24
+
+
+# Predicting the class for test dataset
+test$ClassPredicted <- predict(multinom_model, newdata = test, "class")
+
+# Building classification table
+tab <- table(test$pres_name, test$ClassPredicted)
+tab
+
+# confusion matrix
+(MLR_bag_of_words.confusionmat <- confusionMatrix(test$pres_name, test$ClassPredicted))
+
+# Calculating accuracy - sum of diagonal elements divided by total obs
+(MLR_bag_of_words.accuracyTest <- round((sum(diag(tab))/sum(tab))*100,2)) # 0.4269
+
+```
+
+```{r mlr for tfidf, echo=FALSE, eval=FALSE}
+
+# set seed
+set.seed(2023)
+
+# set c /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+c <- OG_tfidf
+
+# set data to use /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+dat <- OG_tfidf
+
+# /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+
+# convert string factors to numerical response, starting at 0
+dat <- as.data.frame(dat)
+
+
+# Determine sample size
+set.seed(2023)
+ind <- sample(2, nrow(dat), replace=TRUE, prob=c(0.70, 0.30))
+
+train <- dat[ind==1,]
+test <- dat[ind==2,]
+
+# Setting the reference
+train$pres_name <- relevel(train$pres_name, ref = "deKlerk")
+
+# Training the multinomial model
+multinom_model <- multinom(pres_name ~ ., data = train, MaxNWts =10000000)
+
+# Predicting the values for train dataset
+train$ClassPredicted <- predict(multinom_model, newdata = train, "class")
+
+# Building classification table
+tab <- table(train$pres_name, train$ClassPredicted)
+
+# Calculating accuracy - sum of diagonal elements divided by total obs
+(MLR_bag_of_wordsTFIDF.accuracyTrain <- round((sum(diag(tab))/sum(tab))*100,2)) # 95.54
+
+
+# Predicting the class for test dataset
+test$ClassPredicted <- predict(multinom_model, newdata = test, "class")
+
+# Building classification table
+tab <- table(test$pres_name, test$ClassPredicted)
+tab
+
+# confusion matrix
+(MLR_bag_of_wordsTFIDF.confusionmat <- confusionMatrix(test$pres_name, test$ClassPredicted))
+
+# Calculating accuracy - sum of diagonal elements divided by total obs
+(MLR_bag_of_wordsTFIDF.accuracyTest <- round((sum(diag(tab))/sum(tab))*100,2)) # 32
+
+
+```
+
+```{r mlr for rose, echo=FALSE, eval=FALSE}
+# set seed
+set.seed(2023)
+
+# set c /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+c <- ovsamp_bag_of_words
+
+# set data to use /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+dat <- ovsamp_bag_of_words
+
+# /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+
+# convert string factors to numerical response, starting at 0
+dat <- as.data.frame(dat)
+
+
+# Determine sample size
+set.seed(2023)
+ind <- sample(2, nrow(dat), replace=TRUE, prob=c(0.70, 0.30))
+
+train <- dat[ind==1,]
+test <- dat[ind==2,]
+
+# Setting the reference
+train$pres_name <- relevel(train$pres_name, ref = "deKlerk")
+
+# Training the multinomial model
+multinom_model <- multinom(pres_name ~ ., data = train, MaxNWts =10000000)
+
+
+# Predicting the values for train dataset
+train$ClassPredicted <- predict(multinom_model, newdata = train, "class")
+
+# Building classification table
+tab <- table(train$pres_name, train$ClassPredicted)
+
+# Calculating accuracy - sum of diagonal elements divided by total obs
+(MLR_rose.accuracyTrain <- round((sum(diag(tab))/sum(tab))*100,2)) # 95.24
+
+
+# Predicting the class for test dataset
+test$ClassPredicted <- predict(multinom_model, newdata = test, "class")
+
+# Building classification table
+tab <- table(test$pres_name, test$ClassPredicted)
+tab
+
+# confusion matrix
+(MLR_rose.confusionmat <- confusionMatrix(test$pres_name, test$ClassPredicted))
+
+# Calculating accuracy - sum of diagonal elements divided by total obs
+(MLR_rose.accuracyTest <- round((sum(diag(tab))/sum(tab))*100,2)) # 0.4269
+```
+
+## Decision Trees
+
+Decision trees are a machine learning algorithm used for both classification and regression tasks. They work by recursively partitioning the data based on the values of features, creating a tree-like structure. Each internal node represents a decision based on a specific feature, and each leaf node represents the predicted outcome. The algorithm makes decisions by evaluating features at each node and branching accordingly. Decision trees are interpretable, easy to understand, and can handle both numerical and categorical data
+
+```{r dectree for bow, echo=FALSE, eval=FALSE}
+
+# set seed
+set.seed(2023)
+
+
+# set data to use /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+dat <- OG_bag_of_words
+
+# /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+
+# convert string factors to numerical response, starting at 0
+dat <- as.data.frame(dat)
+
+
+# Determine sample size
+set.seed(2023)
+ind <- sample(2, nrow(dat), replace=TRUE, prob=c(0.70, 0.30))
+
+train <- dat[ind==1,]
+test <- dat[ind==2,]
+
+# fit
+fit <- rpart(pres_name ~ ., train, method = 'class')
+
+
+# predict on training
+fittedtrain <- predict(fit, type = 'class')
+predtrain <- table(train$pres_name, fittedtrain)
+predtrain
+
+# print accuracy for training
+paste("Training Accuracy is:", round(sum(diag(predtrain))/sum(predtrain), 3)) # training accuracy - 34%
+
+# predict on unseen data
+fittedtest <- predict(fit, newdata = test, type = 'class')
+predtest <- table(test$pres_name, fittedtest)
+predtest
+
+# view accuracy
+paste("Testing Accuracy is:", round(sum(diag(predtest))/sum(predtest), 3))  # test accuracy - 20%
+(dt.accuracy.orig.test <- round(sum(diag(predtest))/sum(predtest), 3)*100)
+
+# confusion matrix
+(dt_orig.confusionmat <- confusionMatrix(test$pres_name, fittedtest))
+
+
+```
+
+```{r dectree for tfidf, echo=FALSE, eval=FALSE}
+
+# set seed
+set.seed(2023)
+
+
+# set data to use /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+dat <- OG_tfidf
+
+# /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+
+# convert string factors to numerical response, starting at 0
+dat <- as.data.frame(dat)
+
+
+# Determine sample size
+set.seed(2023)
+ind <- sample(2, nrow(dat), replace=TRUE, prob=c(0.70, 0.30))
+
+train <- dat[ind==1,]
+test <- dat[ind==2,]
+
+# fit
+fit <- rpart(pres_name ~ ., train, method = 'class')
+
+
+# predict on training
+fittedtrain <- predict(fit, type = 'class')
+predtrain <- table(train$pres_name, fittedtrain)
+predtrain
+
+# print accuracy for training
+paste("Training Accuracy is:", round(sum(diag(predtrain))/sum(predtrain), 3)) # training accuracy - 34%
+
+# predict on unseen data
+fittedtest <- predict(fit, newdata = test, type = 'class')
+predtest <- table(test$pres_name, fittedtest)
+predtest
+
+# view accuracy
+paste("Testing Accuracy is:", round(sum(diag(predtest))/sum(predtest), 3))  # test accuracy - 20%
+(dt.accuracy.tfidf <- round(sum(diag(predtest))/sum(predtest), 3)*100)
+
+# confusion matrix
+(dt_tfidf.confusionmat <- confusionMatrix(test$pres_name, fittedtest))
+
+
+```
+
+```{r dectree for rose, echo=FALSE, eval=FALSE}
+
+# set seed
+set.seed(2023)
+
+
+# set data to use /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+dat <- ovsamp_bag_of_words
+
+# /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+
+# convert string factors to numerical response, starting at 0
+dat <- as.data.frame(dat)
+
+
+# Determine sample size
+set.seed(2023)
+ind <- sample(2, nrow(dat), replace=TRUE, prob=c(0.70, 0.30))
+
+train <- dat[ind==1,]
+test <- dat[ind==2,]
+
+# fit
+fit <- rpart(pres_name ~ ., train, method = 'class')
+
+
+# predict on training
+fittedtrain <- predict(fit, type = 'class')
+predtrain <- table(train$pres_name, fittedtrain)
+predtrain
+
+# print accuracy for training
+paste("Training Accuracy is:", round(sum(diag(predtrain))/sum(predtrain), 3)) # training accuracy - 34%
+
+# predict on unseen data
+fittedtest <- predict(fit, newdata = test, type = 'class')
+predtest <- table(test$pres_name, fittedtest)
+predtest
+
+# view accuracy
+paste("Testing Accuracy is:", round(sum(diag(predtest))/sum(predtest), 3))  # test accuracy - 20%
+(dt.accuracy.rose <- round(sum(diag(predtest))/sum(predtest), 3)*100)
+
+# confusion matrix
+(dt_rose.confusionmat <- confusionMatrix(test$pres_name, fittedtest))
+
+
+```
+
+# Results
+
+To interpret our results we look at the confusion matrix of the outputs. This provides us with different metrics other than accuracy. We will only be concerned with 3 of these. As mentioned, we will assess the accuracy, as well as the p-values and kappa values. The accuracy is calculated as the percentage of the predictions that were correctly classified, the higher the value is, the better the model is at predicting the correct classes. The p-values show which models are significant at different levels, inversely, the lower the value, the greater the significance of the model. Lastly the Kappa value, this shows the level of agreement between predicted and actual classifications in a confusion matrix. A Kappa score of 1 indicates perfect agreement, 0 suggests agreement equivalent to chance, and -1 indicates complete disagreement. It is particularly valuable for evaluating classification models on imbalanced datasets. The formula incorporates observed and expected agreement, offering insights into a model's performance beyond simple accuracy metrics. Hence why it is of importance when asessing models for this data set.
+
+The results from the models are summarised below:
+
+| Model                             | Dataset             | Accuracy  | P-Value   | Kappa Score |
+|-----------------------------------|---------------------|-----------|-----------|-------------|
+| Neural Network                    | Bag of words        | 0.3006    |0.009159   | 0.058       |
+|                                   | TF-IDF              | 0.3002    | 0.01027   | 0.1213     |
+|                                   | ROSE Data           | 0.5319     | < 2.2e-16     | 0.4399       |
+| Multinomial Logistic Regression   | Bag of words        | 0.8155    | < 2.2e-16            | 0.7596       |
+|                                   | TF-IDF              | 0.8212    |  < 2.2e-16             | 0.767        |
+|                                   | ROSE                | 0.7961    | < 2.2e-16     | 0.7556       |
+| Decision Tree                     | Bag of words        | 0.9994    | < 2.2e-16            | 0.9993      |
+|                                   | TF-IDF              | 0.9994    | < 2.2e-16             | 0.9993         |
+|                                   | ROSE                | 0.9994    |< 2.2e-16    | 0.9993      |
+
+From this table it can be seen that Neural Networks did not perform very well in comparison to the other models. The only neural network that did reasonably well was when it trained on the ROSE data. Although they did not perform well, the p-values do show that they are significant, however the Kappa values are very low. The Multinomial Logistic Regression models well, achieving high accuracy and Kappa values. The Decision Trees did even better! achieving nearly perfect test accuracy and a Kappa value close to 1.
+
+# Conclusion
+
+In this assignment we have shown how to clean text data, making it ready for predictive modelling. We then fit different models to the data. and assessed the respective performances using different metrics.
+
+The data used for the assignmnet was text data from the SONA speeches over the years 1994 to 2023, with the speeches being the input variables and the president who delivered the speech as the output variable. In cleaning the data we created two datasets, using a bag-of-words model and a TF-IDF model, we then also noticed that the data was imbalanced and created a third dataset on the bag-of-words model using the ROSE method of over and undersampling.
+
+The trained 3 different models on each of the datasets, namely a neural network, multinomial logistic regression and a decision tree. Of these, the decision tree performed the best. From the results it can also be seen how the neural network is heavily affected by an imbalanced dataset. The testing accuracy was able to improve the accounting for this. Another issue with the neural network was the time and hardware constraints. These take some time to run and only one on each dataset was done. The hyperparameters could be tuned to provide a better model with greater accuracy. The decision trees may also be overfitting - even though the testing accuracy is very high. These are done without any constraints or regularisation.
+
+# References
+
+Durbach, I. 2023. Data Science for Industry Notes. Statistical Sciences Department, University of Cape Town.
+
+R Core Team. 2022. R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. URL https://www.R-project.org/.
+
+
+
