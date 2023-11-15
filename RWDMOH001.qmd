@@ -1103,5 +1103,9 @@ Durbach, I. 2023. Data Science for Industry Notes. Statistical Sciences Departme
 
 R Core Team. 2022. R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. URL https://www.R-project.org/.
 
+# Github Links:
 
+[GitHub Repo](https://github.com/sirajrawood/Assignment1)
+
+[GitHub Pages Website](https://sirajrawood.github.io/Assignment1/)
 
